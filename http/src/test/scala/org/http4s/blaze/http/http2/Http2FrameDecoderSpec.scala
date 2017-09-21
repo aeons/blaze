@@ -2,6 +2,7 @@ package org.http4s.blaze.http.http2
 
 import java.nio.ByteBuffer
 
+import org.http4s.blaze.http.http2.Priority.Dependant
 import org.http4s.blaze.http.http2.bits.Flags
 import org.specs2.mutable.Specification
 
@@ -331,8 +332,129 @@ class Http2FrameDecoderSpec extends Specification {
         case Error(_: Http2SessionException) => ok
       }
     }
+
+    "HEADERS with dependency on stream 0" >> {
+      // HEADERS frame:
+      val testData = buffer(
+        0x00, 0x00, 0x08, // length
+        0x01, // type
+        Flags.PRIORITY, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        0x00, 0x00, 0x00, 0x00, // dependent stream 0, non-exclusive
+        0x02, // weight 3
+        0x00, 0x00, 0x01)
+      val listener = new HeadersListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+    }
   }
-//  case FrameTypes.PRIORITY      => decodePriorityFrame(buffer, streamId, flags)
+
+  "PRIORITY" >> {
+
+    class PriorityListener extends MockFrameListener(false) {
+      var streamId: Option[Int] = None
+      var priority: Option[Dependant] = None
+      override def onPriorityFrame(streamId: Int, priority: Dependant): Http2Result = {
+        this.streamId = Some(streamId)
+        this.priority = Some(priority)
+        Continue
+      }
+    }
+
+    //  +-+-------------------------------------------------------------+
+    //  |E|                  Stream Dependency (31)                     |
+    //  +-+-------------+-----------------------------------------------+
+    //  |   Weight (8)  |
+    //  +-+-------------+
+
+    "simple PRIORITY frame" >> {
+      // PRIORITY frame:
+      val testData = buffer(
+        0x00, 0x00, 0x05, // length
+        0x02, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        0x00, 0x00, 0x00, 0x02,
+        0x00)
+      val listener = new PriorityListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.priority must beSome(Priority.Dependant(2, false, 1))
+    }
+
+    "simple PRIORITY frame with exclusive" >> {
+      // PRIORITY frame:
+      val testData = buffer(
+        0x00, 0x00, 0x05, // length
+        0x02, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        (1 << 7).toByte, 0x00, 0x00, 0x02, // stream dependency 2
+        0x00)
+      val listener = new PriorityListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.priority must beSome(Priority.Dependant(2, true, 1))
+    }
+
+    "frame with dependent stream being identity stream" >> {
+      // PRIORITY frame:
+      val testData = buffer(
+        0x00, 0x00, 0x05, // length
+        0x02, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        0x00, 0x00, 0x00, 0x01, // stream dependency
+        0x00) // weight
+      val listener = new PriorityListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(_: Http2SessionException) => ok
+      }
+    }
+
+    "frame with too large of body" >> {
+      // PRIORITY frame:
+      val testData = buffer(
+        0x00, 0x00, 0x06, // length
+        0x02, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        0x00, 0x00, 0x00, 0x02, // stream dependency
+        0x00,  // weight
+        0x11) // extra byte
+      val listener = new PriorityListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(_: Http2StreamException) => ok
+      }
+    }
+
+    "frame with too small of body" >> {
+      // PRIORITY frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x02, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        0x00, 0x00, 0x00, 0x02 // stream dependency
+        ) // missing weight
+      val listener = new PriorityListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(_: Http2StreamException) => ok
+      }
+    }
+  }
+
 //  case FrameTypes.RST_STREAM    => decodeRstStreamFrame(buffer, streamId)
 //  case FrameTypes.SETTINGS      => decodeSettingsFrame(buffer, streamId, flags)
 //  case FrameTypes.PUSH_PROMISE  => decodePushPromiseFrame(buffer, streamId, flags)

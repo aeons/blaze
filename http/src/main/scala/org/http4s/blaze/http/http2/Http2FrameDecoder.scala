@@ -146,7 +146,6 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
 
   //////////// PRIORITY ///////////////
   private def decodePriorityFrame(buffer: ByteBuffer, streamId: Int, flags: Byte): Http2Result = {
-
     if (streamId == 0) {
       return Error(PROTOCOL_ERROR.goaway("Priority frame with streamID 0x0"))
     }
