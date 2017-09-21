@@ -24,7 +24,7 @@ private[http2] abstract class HeaderAggregatingFrameListener(
 
   private[this] case class PHeaders(
       streamId: Int,
-      priority: Option[Priority],
+      priority: Priority,
       endStream: Boolean,
       var buffer: ByteBuffer) extends PartialFrame
 
@@ -46,7 +46,7 @@ private[http2] abstract class HeaderAggregatingFrameListener(
     * @param headers decompressed headers.
     */
   def onCompleteHeadersFrame(streamId: Int,
-                             priority: Option[Priority],
+                             priority: Priority,
                              endStream: Boolean,
                              headers: Headers): Http2Result
 
@@ -65,7 +65,7 @@ private[http2] abstract class HeaderAggregatingFrameListener(
   final override def inHeaderSequence: Boolean = hInfo != null
 
   final override def onHeadersFrame(streamId: Int,
-                                    priority: Option[Priority],
+                                    priority: Priority,
                                     endHeaders: Boolean,
                                     endStream: Boolean,
                                     buffer: ByteBuffer): Http2Result = {

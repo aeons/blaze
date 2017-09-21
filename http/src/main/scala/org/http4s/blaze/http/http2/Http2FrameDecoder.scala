@@ -1,6 +1,6 @@
 package org.http4s.blaze.http.http2
 
-import java.nio.ByteBuffer
+import java.nio.{BufferUnderflowException, ByteBuffer}
 
 import Http2Exception._
 import org.http4s.blaze.http.http2.SettingsDecoder.SettingsFrame
@@ -22,7 +22,7 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
     }
 
     buffer.mark()
-    val len  = getLengthField(buffer)
+    val len = getLengthField(buffer)
     val frameType = buffer.get()
     val flags = buffer.get()
     val streamId = getStreamId(buffer)
@@ -58,6 +58,10 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
 
         // this concludes the types established by HTTP/2.0, but it could be an extension
         case code                     => onExtensionFrame(code, streamId, flags, buffer.slice())
+      } catch {
+        case _: BufferUnderflowException =>
+          Error(PROTOCOL_ERROR.goaway
+          (s"Frame type 0x${Integer.toHexString(frameType.toInt)} and size $len underflowed"))
       } finally {
         // reset buffer limits
         buffer.limit(oldLimit)
@@ -101,7 +105,8 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
     val flowBytes = buffer.remaining
 
     if (Flags.PADDED(flags)) {
-      val r = limitPadding(buffer)
+      val padding = buffer.get() & 0xff
+      val r = limitPadding(padding, buffer)
       if (!r.success) {
         return r
       }
@@ -116,16 +121,22 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
       return Error(PROTOCOL_ERROR.goaway("Headers frame with streamID 0x0"))
     }
 
-    if (Flags.PADDED(flags)) {
-      val r = limitPadding(buffer)
-      if (!r.success) return r
+    val padding = if (!Flags.PADDED(flags)) 0 else { buffer.get() & 0xff }
+
+    val priority =
+      if (!Flags.PRIORITY(flags)) Priority.NoPriority
+      else getPriority(buffer)
+
+    val r = limitPadding(padding, buffer)
+    if (!r.success) {
+      return r
     }
 
-    val priority = if (Flags.PRIORITY(flags)) Some(getPriority(buffer)) else None
+    priority match {
+      case Priority.Dependant(dep, _, _) if dep == streamId =>
+        Error(PROTOCOL_ERROR.goaway(s"Header stream depends on itself (id $streamId)"))
 
-    if (priority.isDefined && priority.get.dependentStreamId == streamId) {
-      Error(PROTOCOL_ERROR.goaway(s"Header stream depends on itself (id $streamId)"))
-    } else {
+      case _ =>
       listener.onHeadersFrame(
         streamId, priority, Flags.END_HEADERS(flags),
         Flags.END_STREAM(flags), buffer.slice())
@@ -146,16 +157,15 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
     }
 
     val priority = getPriority(buffer)
-
     if (priority.dependentStreamId != streamId) listener.onPriorityFrame(streamId, priority)
     else Error(PROTOCOL_ERROR.goaway("Priority frame depends on itself"))
   }
 
-  private def getPriority(buffer: ByteBuffer): Priority = {
+  private def getPriority(buffer: ByteBuffer): Priority.Dependant = {
     val rawInt = buffer.getInt()
     val priority = (buffer.get() & 0xff) + 1
     val ex = Flags.DepExclusive(rawInt)
-    Priority(Flags.DepID(rawInt), ex, priority)
+    Priority.Dependant(Flags.DepID(rawInt), ex, priority)
   }
 
   //////////// RST_STREAM ///////////////
@@ -188,14 +198,15 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
       return Error(PROTOCOL_ERROR.goaway("PUSH_PROMISE frame with streamID 0x0"))
     }
 
-    if (Flags.PADDED(flags)) {
-      val r = limitPadding(buffer)
-      if (!r.success) return r
-    }
+    val padding = if (!Flags.PADDED(flags)) 0 else { buffer.get() & 0xff }
 
     val promisedId = buffer.getInt() & Masks.int31
 
-    listener.onPushPromiseFrame(streamId, promisedId, Flags.END_HEADERS(flags), buffer.slice())
+    val r = limitPadding(padding, buffer)
+    if (!r.success) r
+    else {
+      listener.onPushPromiseFrame(streamId, promisedId, Flags.END_HEADERS(flags), buffer.slice())
+    }
   }
 
   //////////// PING ///////////////
@@ -265,27 +276,9 @@ private object Http2FrameDecoder {
     *         and the length field otherwise.
     */
   def getLengthField(buffer: ByteBuffer): Int = {
-    if (buffer.remaining < bits.HeaderSize) -1
-    else {
-      ((buffer.get() & 0xff) << 16) |
-      ((buffer.get() & 0xff) << 8 ) |
-      ((buffer.get() & 0xff) << 0 )
-    }
-  }
-
-  /** Get the number of bytes that compose the next frame, without consuming the buffer.
-    *
-    * The buffers mark is modified by this operation.
-    *
-    * @return -1 if the buffer doesn't have 3 bytes for the length field.
-    */
-  def getFrameSize(buffer: ByteBuffer): Int = {
-    buffer.mark()
-    val len = getLengthField(buffer)
-    buffer.reset()
-
-    if (len == -1) len
-    else len + bits.HeaderSize
+    ((buffer.get() & 0xff) << 16) |
+    ((buffer.get() & 0xff) <<  8) |
+    ((buffer.get() & 0xff) <<  0)
   }
 
   /** Get the stream id from the `Buffer` consuming exactly 4 bytes. */
@@ -295,23 +288,16 @@ private object Http2FrameDecoder {
   /** Read the padding length and strip the requisite bytes from the end of
     * the buffer using the `ByteBuffer.limit` method.
     */
-  def limitPadding(buffer: ByteBuffer): MaybeError = {
-    if (!buffer.hasRemaining) {
-      Error(PROTOCOL_ERROR.goaway(
-        "Malformed Frame: padding flag set but payload doesn't " +
-        "contain enough bytes for a pad length"))
+  private def limitPadding(padding: Int, buffer: ByteBuffer): MaybeError = {
+    if (padding == 0) Continue
+    else if (buffer.remaining < padding) {
+      // If the length of the padding is the length of the
+      // frame payload or greater, the recipient MUST treat this as a
+      // connection error (Section 5.4.1) of type PROTOCOL_ERROR.
+      Error(PROTOCOL_ERROR.goaway(s"Padding ($padding) exceeds payload length: ${buffer.remaining}"))
     } else {
-      val padding = buffer.get() & 0xff
-      if (padding == 0) Continue
-      else if (padding >= buffer.remaining) {
-        // If the length of the padding is the length of the
-        // frame payload or greater, the recipient MUST treat this as a
-        // connection error (Section 5.4.1) of type PROTOCOL_ERROR.
-        Error(PROTOCOL_ERROR.goaway(s"Padding ($padding) exceeds payload length: ${buffer.remaining}"))
-      } else {
-        buffer.limit(buffer.limit - padding)
-        Continue
-      }
+      buffer.limit(buffer.limit - padding)
+      Continue
     }
   }
 }

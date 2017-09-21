@@ -21,16 +21,16 @@ private object bits {
   }
 
   object FrameTypes {
-    val DATA: Byte = 0x0
-    val HEADERS: Byte = 0x1
-    val PRIORITY: Byte = 0x2
-    val RST_STREAM: Byte = 0x3
-    val SETTINGS: Byte = 0x4
-    val PUSH_PROMISE: Byte = 0x5
-    val PING: Byte = 0x6
-    val GOAWAY: Byte = 0x7
-    val WINDOW_UPDATE: Byte = 0x8
-    val CONTINUATION: Byte = 0x9
+    val DATA: Byte = 0x00
+    val HEADERS: Byte = 0x01
+    val PRIORITY: Byte = 0x02
+    val RST_STREAM: Byte = 0x03
+    val SETTINGS: Byte = 0x04
+    val PUSH_PROMISE: Byte = 0x05
+    val PING: Byte = 0x06
+    val GOAWAY: Byte = 0x07
+    val WINDOW_UPDATE: Byte = 0x08
+    val CONTINUATION: Byte = 0x09
   }
 
   //////////////////////////////////////////////////

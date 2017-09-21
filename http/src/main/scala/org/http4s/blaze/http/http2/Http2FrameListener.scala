@@ -30,11 +30,11 @@ trait Http2FrameListener {
     * https://tools.ietf.org/html/rfc7540#section-6.1
     *
     * @param streamId stream id associated with this data frame. The codec will never set this to 0.
-    * @param isLast is the last inbound frame for this stream
+    * @param endStream is the last inbound frame for this stream
     * @param data raw data of this message. Does NOT include padding.
     * @param flowSize bytes counted against the flow window. Includes the data and padding
     */
-  def onDataFrame(streamId: Int, isLast: Boolean, data: ByteBuffer, flowSize: Int): Http2Result
+  def onDataFrame(streamId: Int, endStream: Boolean, data: ByteBuffer, flowSize: Int): Http2Result
 
   /** Called successful receipt of a HEADERS frame
     *
@@ -48,7 +48,7 @@ trait Http2FrameListener {
     * @param data compressed binary header data
     * @return
     */
-  def onHeadersFrame(streamId: Int, priority: Option[Priority], endHeaders: Boolean, endStream: Boolean, data: ByteBuffer): Http2Result
+  def onHeadersFrame(streamId: Int, priority: Priority, endHeaders: Boolean, endStream: Boolean, data: ByteBuffer): Http2Result
 
   /** Called on successful receipt of a CONTINUATION frame
     *
@@ -65,7 +65,7 @@ trait Http2FrameListener {
     * @param streamId stream id associated with this priority frame. The codec will never set this to 0.
     * @param priority priority data
     */
-  def onPriorityFrame(streamId: Int, priority: Priority): Http2Result
+  def onPriorityFrame(streamId: Int, priority: Priority.Dependant): Http2Result
 
   /** Called on successful receipt of a RST_STREAM frame
     *

@@ -58,7 +58,7 @@ private object Http2FrameSerializer {
 
   // TODO: document the rest of these.
   def mkHeaderFrame(streamId: Int,
-                    priority: Option[Priority],
+                    priority: Priority,
                     endHeaders: Boolean,
                     endStream: Boolean,
                     padding: Byte,
@@ -78,7 +78,7 @@ private object Http2FrameSerializer {
       flags |= Flags.PADDED
     }
 
-    if (priority.nonEmpty) {
+    if (priority.isDefined) {
       size1 += 4 + 1      // stream dep and weight
       flags |= Flags.PRIORITY
     }
@@ -92,8 +92,8 @@ private object Http2FrameSerializer {
     if (padding > 0) header.put((padding - 1).toByte)
 
     priority match {
-      case Some(p) => writePriority(p, header)
-      case None    => // NOOP
+      case p: Priority.Dependant => writeDependantPriority(p, header)
+      case Priority.NoPriority    => // NOOP
     }
 
     header.flip()
@@ -101,7 +101,7 @@ private object Http2FrameSerializer {
     header::headerData::paddedTail(padding - 1)
   }
 
-  def mkPriorityFrame(streamId: Int, priority: Priority): ByteBuffer = {
+  def mkPriorityFrame(streamId: Int, priority: Priority.Dependant): ByteBuffer = {
     require(streamId > 0, "Invalid streamID for PRIORITY frame")
 
     val size = 5
@@ -109,7 +109,7 @@ private object Http2FrameSerializer {
     val buffer = BufferTools.allocate(HeaderSize + size)
     writeFrameHeader(size, FrameTypes.PRIORITY, 0, streamId, buffer)
 
-    writePriority(priority, buffer)
+    writeDependantPriority(priority, buffer)
     buffer.flip()
 
     buffer
@@ -240,7 +240,7 @@ private object Http2FrameSerializer {
 
   //////////////////////////////////////////////////////////////////////////////////////////
 
-  private[this] def writePriority(p: Priority, buffer: ByteBuffer): Unit = {
+  private[this] def writeDependantPriority(p: Priority.Dependant, buffer: ByteBuffer): Unit = {
     buffer.putInt(p.dependentStreamId | (if (p.exclusive) Masks.exclusive else 0))
     buffer.put(((p.priority - 1) & 0xff).toByte)
     ()

@@ -51,10 +51,10 @@ class Http2FrameSerializerSpec extends Specification {
   "HEADERS frame" should {
     def dat = mkData(20)
 
-    def dec(sId: Int, pri: Option[Priority], end_h: Boolean,  end_s: Boolean) =
+    def dec(sId: Int, pri: Priority, end_h: Boolean,  end_s: Boolean) =
       decoder(new MockFrameListener(false) {
         override def onHeadersFrame(streamId: Int,
-                                    priority: Option[Priority],
+                                    priority: Priority,
                                     end_headers: Boolean,
                                     end_stream: Boolean,
                                     buffer: ByteBuffer): Http2Result = {
@@ -68,36 +68,36 @@ class Http2FrameSerializerSpec extends Specification {
     })
 
     "make round trip" in {
-      val buff1 = joinBuffers(Http2FrameSerializer.mkHeaderFrame(1, None, true, true, 0, dat))
-      dec(1, None, true, true).decodeBuffer(buff1) must_== Continue
+      val buff1 = joinBuffers(Http2FrameSerializer.mkHeaderFrame(1, Priority.NoPriority, true, true, 0, dat))
+      dec(1, Priority.NoPriority, true, true).decodeBuffer(buff1) must_== Continue
       buff1.remaining() must_== 0
 
-      val priority = Priority(3, false, 6)
+      val priority = Priority.Dependant(3, false, 6)
 
-      val buff2 = joinBuffers(Http2FrameSerializer.mkHeaderFrame(2, Some(priority), true, false, 0, dat))
-      dec(2, Some(priority), true, false).decodeBuffer(buff2) must_== Continue
+      val buff2 = joinBuffers(Http2FrameSerializer.mkHeaderFrame(2, priority, true, false, 0, dat))
+      dec(2, priority, true, false).decodeBuffer(buff2) must_== Continue
       buff2.remaining() must_== 0
     }
 
     "preserve padding" in {
-      val buff = addBonus(Http2FrameSerializer.mkHeaderFrame(1, None, true, true, 0, dat))
-      dec(1, None, true, true).decodeBuffer(buff) must_== Continue
+      val buff = addBonus(Http2FrameSerializer.mkHeaderFrame(1, Priority.NoPriority, true, true, 0, dat))
+      dec(1, Priority.NoPriority, true, true).decodeBuffer(buff) must_== Continue
       buff.remaining() must_== bonusSize
     }
 
     "fail on bad stream ID" in {
-      Http2FrameSerializer.mkHeaderFrame(0, None, true, true, 0, dat) must throwA[Exception]
+      Http2FrameSerializer.mkHeaderFrame(0, Priority.NoPriority, true, true, 0, dat) must throwA[Exception]
     }
 
     "fail on bad padding" in {
-      Http2FrameSerializer.mkHeaderFrame(1, None, true, true, -10, dat) must throwA[Exception]
+      Http2FrameSerializer.mkHeaderFrame(1, Priority.NoPriority, true, true, -10, dat) must throwA[Exception]
     }
   }
 
   "PRIORITY frame" should {
     def dec(sId: Int, p: Priority) =
       decoder(new MockFrameListener(false) {
-        override def onPriorityFrame(streamId: Int, priority: Priority): Http2Result = {
+        override def onPriorityFrame(streamId: Int, priority: Priority.Dependant): Http2Result = {
           sId must_== streamId
           p must_== priority
           Continue
@@ -105,26 +105,26 @@ class Http2FrameSerializerSpec extends Specification {
       })
 
     "make a round trip" in {
-      val buff1 = Http2FrameSerializer.mkPriorityFrame(1, Priority(2, true, 1))
-      dec(1, Priority(2, true, 1)).decodeBuffer(buff1) must_== Continue
+      val buff1 = Http2FrameSerializer.mkPriorityFrame(1, Priority.Dependant(2, true, 1))
+      dec(1, Priority.Dependant(2, true, 1)).decodeBuffer(buff1) must_== Continue
       buff1.remaining() must_== 0
 
-      val buff2 = Http2FrameSerializer.mkPriorityFrame(1, Priority(2, false, 10))
-      dec(1, Priority(2, false, 10)).decodeBuffer(buff2) must_== Continue
+      val buff2 = Http2FrameSerializer.mkPriorityFrame(1, Priority.Dependant(2, false, 10))
+      dec(1, Priority.Dependant(2, false, 10)).decodeBuffer(buff2) must_== Continue
       buff2.remaining() must_== 0
     }
 
     "fail on bad priority" in {
-      Priority(1, true, 500) must throwA[Exception]
-      Priority(1, true, -500) must throwA[Exception]
+      Priority.Dependant(1, true, 500) must throwA[Exception]
+      Priority.Dependant(1, true, -500) must throwA[Exception]
     }
 
     "fail on bad streamId" in {
-      Http2FrameSerializer.mkPriorityFrame(0, Priority(1, true, 0)) must throwA[Exception]
+      Http2FrameSerializer.mkPriorityFrame(0, Priority.Dependant(1, true, 0)) must throwA[Exception]
     }
 
     "fail on bad stream dependency" in {
-      Priority(0, true, 0) must throwA[Exception]
+      Priority.Dependant(0, true, 0) must throwA[Exception]
     }
   }
 
