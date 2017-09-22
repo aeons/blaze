@@ -114,7 +114,7 @@ trait Http2FrameListener {
     * @param errorCode error code describing the reason for the GOAWAY frame.
     * @param debugData opaque data that may be useful for debugging purposes.
     */
-  def onGoAwayFrame(lastStream: Int, errorCode: Long, debugData: ByteBuffer): Http2Result
+  def onGoAwayFrame(lastStream: Int, errorCode: Long, debugData: Array[Byte]): Http2Result
 
   /** Called on successful receipt of a WINDOW_UPDATE frame
     *

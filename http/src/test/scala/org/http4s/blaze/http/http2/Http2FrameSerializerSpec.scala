@@ -193,12 +193,10 @@ class Http2FrameSerializerSpec extends Specification {
   "GOAWAY frame" should {
     def dec(sId: Int, err: Long, d: ByteBuffer) =
       decoder(new MockHeaderAggregatingFrameListener {
-
-
-        override def onGoAwayFrame(lastStream: Int, errorCode: Long, debugData: ByteBuffer): Http2Result = {
+        override def onGoAwayFrame(lastStream: Int, errorCode: Long, debugData: Array[Byte]): Http2Result = {
           sId must_== lastStream
           err must_== errorCode
-          assert(compare(d::Nil, debugData::Nil))
+          assert(compare(d::Nil, ByteBuffer.wrap(debugData)::Nil))
           Continue
         }
       })

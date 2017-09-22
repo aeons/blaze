@@ -2,6 +2,7 @@ package org.http4s.blaze.http.http2
 
 import java.nio.ByteBuffer
 
+import org.http4s.blaze.http.http2.Http2Settings.Setting
 import org.http4s.blaze.http.http2.Priority.Dependant
 import org.http4s.blaze.http.http2.bits.Flags
 import org.specs2.mutable.Specification
@@ -143,7 +144,7 @@ class Http2FrameDecoderSpec extends Specification {
       val listener = new DataListener
       val dec = new Http2FrameDecoder(Http2Settings.default, listener)
       dec.decodeBuffer(testData) must beLike {
-        case Error(_: Http2SessionException) => ok
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
       }
     }
 
@@ -158,7 +159,7 @@ class Http2FrameDecoderSpec extends Specification {
       val listener = new DataListener
       val dec = new Http2FrameDecoder(Http2Settings.default, listener)
       dec.decodeBuffer(testData) must beLike {
-        case Error(_: Http2SessionException) => ok
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
       }
     }
   }
@@ -311,7 +312,7 @@ class Http2FrameDecoderSpec extends Specification {
       val dec = new Http2FrameDecoder(Http2Settings.default, listener)
 
       dec.decodeBuffer(testData) must beLike {
-        case Error(_: Http2SessionException) => ok
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
       }
     }
 
@@ -329,7 +330,7 @@ class Http2FrameDecoderSpec extends Specification {
       val dec = new Http2FrameDecoder(Http2Settings.default, listener)
 
       dec.decodeBuffer(testData) must beLike {
-        case Error(_: Http2SessionException) => ok
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
       }
     }
 
@@ -402,7 +403,7 @@ class Http2FrameDecoderSpec extends Specification {
       listener.priority must beSome(Priority.Dependant(2, true, 1))
     }
 
-    "frame with dependent stream being identity stream" >> {
+    "frame with dependent stream being itself" >> {
       // PRIORITY frame:
       val testData = buffer(
         0x00, 0x00, 0x05, // length
@@ -415,7 +416,7 @@ class Http2FrameDecoderSpec extends Specification {
       val dec = new Http2FrameDecoder(Http2Settings.default, listener)
 
       dec.decodeBuffer(testData) must beLike {
-        case Error(_: Http2SessionException) => ok
+        case Error(Http2StreamException(1, Http2Exception.PROTOCOL_ERROR.code, _)) => ok
       }
     }
 
@@ -433,7 +434,7 @@ class Http2FrameDecoderSpec extends Specification {
       val dec = new Http2FrameDecoder(Http2Settings.default, listener)
 
       dec.decodeBuffer(testData) must beLike {
-        case Error(_: Http2StreamException) => ok
+        case Error(Http2StreamException(1, Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
       }
     }
 
@@ -450,17 +451,692 @@ class Http2FrameDecoderSpec extends Specification {
       val dec = new Http2FrameDecoder(Http2Settings.default, listener)
 
       dec.decodeBuffer(testData) must beLike {
-        case Error(_: Http2StreamException) => ok
+        case Error(Http2StreamException(1, Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
       }
     }
   }
 
-//  case FrameTypes.RST_STREAM    => decodeRstStreamFrame(buffer, streamId)
-//  case FrameTypes.SETTINGS      => decodeSettingsFrame(buffer, streamId, flags)
-//  case FrameTypes.PUSH_PROMISE  => decodePushPromiseFrame(buffer, streamId, flags)
-//  case FrameTypes.PING          => decodePingFrame(buffer, streamId, flags)
-//  case FrameTypes.GOAWAY        => decodeGoAwayFrame(buffer, streamId)
-//  case FrameTypes.WINDOW_UPDATE => decodeWindowUpdateFrame(buffer, streamId)
+  "RST_STREAM" >> {
+
+    class RstListener extends MockFrameListener(false) {
+      var streamId: Option[Int] = None
+      var code: Option[Long] = None
+      override def onRstStreamFrame(streamId: Int, code: Long): Http2Result = {
+        this.streamId = Some(streamId)
+        this.code = Some(code)
+        Continue
+      }
+    }
+
+    //  +---------------------------------------------------------------+
+    //  |                        Error Code (32)                        |
+    //  +---------------------------------------------------------------+
+
+    "Simple RST" >> {
+      "simple frame" >> {
+        // RST frame:
+        val testData = buffer(
+          0x00, 0x00, 0x04, // length
+          0x03, // type
+          0x00, // flags
+          0x00, 0x00, 0x00, 0x01, // streamId
+          0x00, 0x00, 0x00, 0x02 // code
+        ) // missing weight
+        val listener = new RstListener
+        val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+        dec.decodeBuffer(testData) must_== Continue
+        listener.streamId must beSome(1)
+        listener.code must beSome(2)
+      }
+
+      "stream 0" >> {
+        // RST frame:
+        val testData = buffer(
+          0x00, 0x00, 0x4, // length
+          0x03, // type
+          0x00, // flags
+          0x00, 0x00, 0x00, 0x00, // streamId
+          0x00, 0x00, 0x00, 0x00 // code
+        ) // missing weight
+        val listener = new RstListener
+        val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+        dec.decodeBuffer(testData) must beLike {
+          case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+        }
+      }
+
+      "frame to small" >> {
+        // RST frame:
+        val testData = buffer(
+          0x00, 0x00, 0x3, // length
+          0x03, // type
+          0x00, // flags
+          0x00, 0x00, 0x00, 0x01, // streamId
+          0x00, 0x00, 0x00 // code
+        ) // missing weight
+        val listener = new RstListener
+        val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+        dec.decodeBuffer(testData) must beLike {
+          case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+        }
+      }
+
+      "frame to large" >> {
+        // RST frame:
+        val testData = buffer(
+          0x00, 0x00, 0x5, // length
+          0x03, // type
+          0x00, // flags
+          0x00, 0x00, 0x00, 0x01, // streamId
+          0x00, 0x00, 0x00, 0x00, 0x00 // code
+        ) // missing weight
+        val listener = new RstListener
+        val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+        dec.decodeBuffer(testData) must beLike {
+          case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+        }
+      }
+    }
+  }
+
+  "SETTINGS" >> {
+    class SettingsListener extends MockFrameListener(false) {
+      var ack: Option[Boolean] = None
+      var settings: Option[Seq[Setting]] = None
+      override def onSettingsFrame(ack: Boolean, settings: Seq[Setting]): Http2Result = {
+        this.ack = Some(ack)
+        this.settings = Some(settings)
+        Continue
+      }
+    }
+
+    //  +-------------------------------+
+    //  |       Identifier (16)         |
+    //  +-------------------------------+-------------------------------+
+    //  |                        Value (32)                             |
+    //  +---------------------------------------------------------------+
+
+    "simple frame" >> {
+      // SETTING frame:
+      val testData = buffer(
+        0x00, 0x00, 0x00, // length
+        0x04, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00 // streamId
+        // body
+      )
+      val listener = new SettingsListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.ack must beSome(false)
+      listener.settings must beSome(Seq.empty[Setting])
+    }
+
+    "simple frame ack" >> {
+      // SETTING frame:
+      val testData = buffer(
+        0x00, 0x00, 0x00, // length
+        0x04, // type
+        Flags.ACK, // flags
+        0x00, 0x00, 0x00, 0x00 // streamId
+        // body
+      )
+      val listener = new SettingsListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.ack must beSome(true)
+      listener.settings must beSome(Seq.empty[Setting])
+    }
+
+    "simple frame with settings" >> {
+      // SETTING frame:
+      val testData = buffer(
+        0x00, 0x00, 0x06, // length
+        0x04, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        0x00, 0x00, // key
+        0x00, 0x00, 0x00, 0x01 // value
+        // body
+      )
+      val listener = new SettingsListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.ack must beSome(false)
+      listener.settings must beSome(Seq(Setting(0, 1)))
+    }
+
+    "streamid != 0" >> {
+      // SETTING frame:
+      val testData = buffer(
+        0x00, 0x00, 0x00, // length
+        0x04, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01 // streamId
+        // body
+      ) // missing weight
+      val listener = new SettingsListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+
+    "settings frame with settings and ack" >> {
+      // SETTING frame:
+      val testData = buffer(
+        0x00, 0x00, 0x06, // length
+        0x04, // type
+        Flags.ACK, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        0x00, 0x00, // key
+        0x00, 0x00, 0x00, 0x01 // value
+        // body
+      )
+      val listener = new SettingsListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+      }
+    }
+
+    "invalid size" >> {
+      // SETTING frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x04, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00,0x00,0x00
+      ) // missing weight
+      val listener = new SettingsListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+      }
+    }
+  }
+
+  "PUSH_PROMISE" >> {
+    class PushListener extends MockFrameListener(false) {
+      var streamId: Option[Int] = None
+      var promisedId: Option[Int] = None
+      var endHeaders: Option[Boolean] = None
+      var data: ByteBuffer = null
+      override def onPushPromiseFrame(streamId: Int, promisedId: Int, end_headers: Boolean, data: ByteBuffer): Http2Result = {
+        this.streamId = Some(streamId)
+        this.promisedId = Some(promisedId)
+        this.endHeaders = Some(end_headers)
+        this.data = data
+        Continue
+      }
+    }
+
+    //  +---------------+
+    //  |Pad Length? (8)|
+    //  +-+-------------+-----------------------------------------------+
+    //  |R|                  Promised Stream ID (31)                    |
+    //  +-+-----------------------------+-------------------------------+
+    //  |                   Header Block Fragment (*)                 ...
+    //  +---------------------------------------------------------------+
+    //  |                           Padding (*)                       ...
+    //  +---------------------------------------------------------------+
+
+    "simple frame" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x05, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x02 // promised id
+      )
+      val listener = new PushListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.promisedId must beSome(2)
+      listener.endHeaders must beSome(false)
+      listener.data must_== buffer()
+    }
+
+    "simple frame with end headers" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x05, // type
+        Flags.END_HEADERS, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x02 // promised id
+      )
+      val listener = new PushListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.promisedId must beSome(2)
+      listener.endHeaders must beSome(true)
+      listener.data must_== buffer()
+    }
+
+    "frame with padding of 0" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x05, // length
+        0x05, // type
+        Flags.PADDED, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, // pad length
+        0x00, 0x00, 0x00, 0x02 // promised id
+      )
+      val listener = new PushListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.promisedId must beSome(2)
+      listener.endHeaders must beSome(false)
+      listener.data must_== buffer()
+    }
+
+    "frame with padding of 1 and body" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x07, // length
+        0x05, // type
+        Flags.PADDED, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x01, // pad length
+        0x00, 0x00, 0x00, 0x02, // promised id
+        0x00,
+        0x01 // the padding
+      )
+      val listener = new PushListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.promisedId must beSome(2)
+      listener.endHeaders must beSome(false)
+      listener.data must_== buffer(0x00)
+    }
+
+    "illegal streamid" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x05, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x02 // promised id
+      )
+      val listener = new PushListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+
+    "illegal push stream id" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x05, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x01 // promised id
+      )
+      val listener = new PushListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+
+    "streamid == push streamid" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x05, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x01 // promised id
+      )
+      val listener = new PushListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+  }
+
+  "PING" >> {
+    class PingListener extends MockFrameListener(false) {
+      var ack: Option[Boolean] = None
+      var data: Option[Array[Byte]] = None
+
+      override def onPingFrame(ack: Boolean, data: Array[Byte]): Http2Result = {
+        this.ack = Some(ack)
+        this.data = Some(data)
+        Continue
+      }
+    }
+
+    //  +---------------------------------------------------------------+
+    //  |                                                               |
+    //  |                      Opaque Data (64)                         |
+    //  |                                                               |
+    //  +---------------------------------------------------------------+
+
+    "simple frame" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x08, // length
+        0x06, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x00, // opaque data
+        0x00, 0x00, 0x00, 0x00
+      )
+      val listener = new PingListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.ack must beSome(false)
+      listener.data must beSome(new Array[Byte](8))
+    }
+
+    "simple frame ack" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x08, // length
+        0x06, // type
+        Flags.ACK, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x00, // opaque data
+        0x00, 0x00, 0x00, 0x00
+      )
+      val listener = new PingListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.ack must beSome(true)
+      listener.data must beSome(new Array[Byte](8))
+    }
+
+    "stream id != 0" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x08, // length
+        0x06, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x00, // opaque data
+        0x00, 0x00, 0x00, 0x00
+      )
+      val listener = new PingListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+
+    "too small" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x07, // length
+        0x06, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x00, // opaque data
+        0x00, 0x00, 0x00
+      )
+      val listener = new PingListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+      }
+    }
+
+    "too large" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x09, // length
+        0x06, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x00, // opaque data
+        0x00, 0x00, 0x00, 0x00, 0x00
+      )
+      val listener = new PingListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+      }
+    }
+  }
+
+  "GOAWAY" >> {
+    class GoAwayListener extends MockFrameListener(false) {
+      var lastStream: Option[Int] = None
+      var errorCode: Option[Long] = None
+      var debugData: Option[Array[Byte]] = None
+      override def onGoAwayFrame(lastStream: Int, errorCode: Long, debugData: Array[Byte]): Http2Result = {
+        this.lastStream = Some(lastStream)
+        this.errorCode = Some(errorCode)
+        this.debugData = Some(debugData)
+        Continue
+      }
+    }
+
+    //  +-+-------------------------------------------------------------+
+    //  |R|                  Last-Stream-ID (31)                        |
+    //  +-+-------------------------------------------------------------+
+    //  |                      Error Code (32)                          |
+    //  +---------------------------------------------------------------+
+    //  |                  Additional Debug Data (*)                    |
+    //  +---------------------------------------------------------------+
+
+    "simple frame" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x08, // length
+        0x07, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x01, // last stream
+        0x00, 0x00, 0x00, 0x00  // error code
+      )
+      val listener = new GoAwayListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.lastStream must beSome(1)
+      listener.errorCode must beSome(0)
+      listener.debugData must beSome(new Array[Byte](0))
+    }
+
+    "simple frame with data" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x09, // length
+        0x07, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x01, // last stream
+        0x00, 0x00, 0x00, 0x00,  // error code
+        0x01
+      )
+      val listener = new GoAwayListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.lastStream must beSome(1)
+      listener.errorCode must beSome(0)
+      listener.debugData must beSome(Array[Byte](0x01))
+    }
+
+    "streamid != 0" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x09, // length
+        0x07, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x01, // last stream
+        0x00, 0x00, 0x00, 0x00,  // error code
+        0x01
+      )
+      val listener = new GoAwayListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+  }
+
+  "WINDOW_UPDATE" >> {
+
+    class WindowListener extends MockFrameListener(false) {
+      var streamId: Option[Int] = None
+      var sizeIncrement: Option[Int] = None
+      override def onWindowUpdateFrame(streamId: Int, sizeIncrement: Int): Http2Result = {
+        this.streamId = Some(streamId)
+        this.sizeIncrement = Some(sizeIncrement)
+        Continue
+      }
+    }
+
+    //  +-+-------------------------------------------------------------+
+    //  |R|              Window Size Increment (31)                     |
+    //  +-+-------------------------------------------------------------+
+
+    "simple frame" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x08, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x01 // increment
+      )
+      val listener = new WindowListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(0)
+      listener.sizeIncrement must beSome(1)
+    }
+
+    "increment 0 on session" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x08, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x00 // increment
+      )
+      val listener = new WindowListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+
+    "increment 0 on stream" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x04, // length
+        0x08, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x00 // increment
+      )
+      val listener = new WindowListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2StreamException(1, Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+
+    "too small" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x03, // length
+        0x08, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00 // increment
+      )
+      val listener = new WindowListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+      }
+    }
+
+    "too large" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x05, // length
+        0x08, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x00, 0x00, 0x00, 0x01, // increment
+        0x00
+      )
+      val listener = new WindowListener
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.FRAME_SIZE_ERROR.code, _)) => ok
+      }
+    }
+  }
+
 //  case FrameTypes.CONTINUATION  => decodeContinuationFrame(buffer, streamId, flags)
 
   "unknown frame types" >> {

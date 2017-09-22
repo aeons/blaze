@@ -60,7 +60,7 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
         case code                     => onExtensionFrame(code, streamId, flags, buffer.slice())
       } catch {
         case _: BufferUnderflowException =>
-          Error(PROTOCOL_ERROR.goaway
+          Error(FRAME_SIZE_ERROR.goaway
           (s"Frame type 0x${Integer.toHexString(frameType.toInt)} and size $len underflowed"))
       } finally {
         // reset buffer limits
@@ -157,7 +157,7 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
 
     val priority = getPriority(buffer)
     if (priority.dependentStreamId != streamId) listener.onPriorityFrame(streamId, priority)
-    else Error(PROTOCOL_ERROR.goaway("Priority frame depends on itself"))
+    else Error(PROTOCOL_ERROR.rst(streamId, "Priority frame depends on itself"))
   }
 
   private def getPriority(buffer: ByteBuffer): Priority.Dependant = {
@@ -198,8 +198,14 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
     }
 
     val padding = if (!Flags.PADDED(flags)) 0 else { buffer.get() & 0xff }
-
     val promisedId = buffer.getInt() & Masks.int31
+
+    if (promisedId == 0) {
+      return Error(PROTOCOL_ERROR.goaway("PUSH_PROMISE frame with promised stream id 0x0"))
+    } else if (promisedId == streamId) {
+      return Error(PROTOCOL_ERROR.goaway(
+        s"PUSH_PROMISE frame with promised stream of the same stream $streamId"))
+    }
 
     val r = limitPadding(padding, buffer)
     if (!r.success) r
@@ -211,7 +217,6 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
   //////////// PING ///////////////
   private def decodePingFrame(buffer: ByteBuffer, streamId: Int, flags: Byte): Http2Result = {
     val PingSize = 8
-
     if (streamId != 0) {
       Error(PROTOCOL_ERROR.goaway(s"PING frame with streamID != 0x0. Id: $streamId"))
     } else if (buffer.remaining != PingSize) {
@@ -226,31 +231,29 @@ class Http2FrameDecoder(mySettings: Http2Settings, listener: Http2FrameListener)
 
   //////////// GOAWAY ///////////////
   private def decodeGoAwayFrame(buffer: ByteBuffer, streamId: Int): Http2Result = {
-    if (buffer.remaining < 8) {
-      val msg = "GOAWAY frame is wrong size. Expected  > 8, received " + buffer.remaining
-      Error(FRAME_SIZE_ERROR.goaway(msg))
-    } else if (streamId != 0) {
-      Error(PROTOCOL_ERROR.goaway(s"GOAWAY frame with streamID != 0x0. Id: $streamId"))
+    if (streamId != 0) {
+      Error(PROTOCOL_ERROR.goaway(s"GOAWAY frame with $streamId != 0x0."))
     } else {
       val lastStream = Flags.DepID(buffer.getInt)
       val code: Long = buffer.getInt() & 0xffffffffl   // java doesn't have unsigned integers
-      listener.onGoAwayFrame(lastStream, code, buffer.slice())
+      val data = new Array[Byte](buffer.remaining)
+      buffer.get(data)
+      listener.onGoAwayFrame(lastStream, code, data)
     }
   }
 
   //////////// WINDOW_UPDATE ///////////////
   private def decodeWindowUpdateFrame(buffer: ByteBuffer, streamId: Int): Http2Result = {
     if (buffer.remaining != 4) {
-      val msg = "WINDOW_UPDATE frame frame is wrong size. Expected 8, received " + buffer.remaining
-      return Error(FRAME_SIZE_ERROR.goaway(msg))
+      return Error(FRAME_SIZE_ERROR.goaway(s"WindowUpdate with invalid size: ${buffer.remaining()}"))
     }
 
     val size = buffer.getInt() & Masks.int31
-    if (size == 0) {  // never less than 0 due to the mask above
-      return {
-        val prefix = if (streamId == 0) "session" else s"stream ($streamId)"
-        Error(PROTOCOL_ERROR.goaway(s"$prefix WINDOW_UPDATE with invalid size: $size"))
-      }
+    if (size == 0) return Error {  // never less than 0 due to the mask above
+      if (streamId == 0)
+        PROTOCOL_ERROR.goaway(s"WINDOW_UPDATE with invalid update size 0")
+      else
+        PROTOCOL_ERROR.rst(streamId, s"WINDOW_UPDATE with invalid update size 0")
     }
 
     listener.onWindowUpdateFrame(streamId, size)
