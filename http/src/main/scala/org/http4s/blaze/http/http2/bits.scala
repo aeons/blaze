@@ -14,10 +14,11 @@ private object bits {
     clientHandshakeBuffer.duplicate()
 
   object Masks {
-    val STREAMID: Int = 0x7fffffff
+    val INT31: Int = 0x7fffffff
+    val EXCLUSIVE: Int = ~INT31
+    val STREAMID: Int = INT31
     val LENGTH: Int = 0xffffff
-    val int31: Int = 0x7fffffff
-    val exclusive: Int = ~int31
+
   }
 
   object FrameTypes {
@@ -51,8 +52,8 @@ private object bits {
     val ACK: Byte = 0x1
     def ACK(flags: Byte): Boolean = checkFlag(flags, ACK) // ping
 
-    def DepID(id: Int): Int = id & Masks.int31
-    def DepExclusive(id: Int): Boolean = (Masks.exclusive & id) != 0
+    def DepID(id: Int): Int = id & Masks.STREAMID
+    def DepExclusive(id: Int): Boolean = (Masks.EXCLUSIVE & id) != 0
 
     @inline
     private[this] def checkFlag(flags: Byte, flag: Byte) = (flags & flag) != 0

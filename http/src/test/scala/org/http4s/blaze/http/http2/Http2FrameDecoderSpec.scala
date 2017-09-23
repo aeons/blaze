@@ -1137,6 +1137,98 @@ class Http2FrameDecoderSpec extends Specification {
     }
   }
 
+  "CONTINUATION" >> {
+    class ContinuationListener(inseq: Boolean) extends MockFrameListener(inseq) {
+      var streamId: Option[Int] = None
+      var endHeaders: Option[Boolean] = None
+      var data: ByteBuffer = null
+      override def onContinuationFrame(streamId: Int, endHeaders: Boolean, data: ByteBuffer): Http2Result = {
+        this.streamId = Some(streamId)
+        this.endHeaders = Some(endHeaders)
+        this.data = data
+        Continue
+      }
+    }
+
+    //  +---------------------------------------------------------------+
+    //  |                   Header Block Fragment (*)                 ...
+    //  +---------------------------------------------------------------+
+
+    "simple frame" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x01, // length
+        0x09, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x01 // increment
+      )
+      val listener = new ContinuationListener(true)
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.endHeaders must beSome(false)
+      listener.data must_== buffer(0x01)
+    }
+
+    "streamId == 0" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x01, // length
+        0x09, // type
+        0x00, // flags
+        0x00, 0x00, 0x00, 0x00, // streamId
+        // body
+        0x01 // increment
+      )
+      val listener = new ContinuationListener(true)
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+
+    "end_headers" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x01, // length
+        0x09, // type
+        Flags.END_HEADERS, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x01 // increment
+      )
+      val listener = new ContinuationListener(true)
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must_== Continue
+      listener.streamId must beSome(1)
+      listener.endHeaders must beSome(true)
+      listener.data must_== buffer(0x01)
+    }
+
+    "not in headers sequence" >> {
+      // PUSH_PROMISE frame:
+      val testData = buffer(
+        0x00, 0x00, 0x01, // length
+        0x09, // type
+        Flags.END_HEADERS, // flags
+        0x00, 0x00, 0x00, 0x01, // streamId
+        // body
+        0x01 // increment
+      )
+      val listener = new ContinuationListener(false)
+      val dec = new Http2FrameDecoder(Http2Settings.default, listener)
+
+      dec.decodeBuffer(testData) must beLike {
+        case Error(Http2SessionException(Http2Exception.PROTOCOL_ERROR.code, _)) => ok
+      }
+    }
+  }
+
 //  case FrameTypes.CONTINUATION  => decodeContinuationFrame(buffer, streamId, flags)
 
   "unknown frame types" >> {

@@ -206,7 +206,7 @@ private object Http2FrameSerializer {
 
     val buffer = BufferTools.allocate(HeaderSize + size)
     writeFrameHeader(size + debugData.remaining(), FrameTypes.GOAWAY, 0x0, 0x0, buffer)
-    buffer.putInt(lastStreamId & Masks.int31)
+    buffer.putInt(lastStreamId)
           .putInt(error.toInt)
           .flip()
 
@@ -221,7 +221,7 @@ private object Http2FrameSerializer {
 
     val buffer = BufferTools.allocate(HeaderSize + size)
     writeFrameHeader(size, FrameTypes.WINDOW_UPDATE, 0x0, streamId, buffer)
-    buffer.putInt(Masks.int31 & increment)
+    buffer.putInt(increment)
           .flip()
 
     buffer
@@ -241,7 +241,7 @@ private object Http2FrameSerializer {
   //////////////////////////////////////////////////////////////////////////////////////////
 
   private[this] def writeDependantPriority(p: Priority.Dependant, buffer: ByteBuffer): Unit = {
-    buffer.putInt(p.dependentStreamId | (if (p.exclusive) Masks.exclusive else 0))
+    buffer.putInt(p.dependentStreamId | (if (p.exclusive) Masks.EXCLUSIVE else 0))
     buffer.put(((p.priority - 1) & 0xff).toByte)
     ()
   }
